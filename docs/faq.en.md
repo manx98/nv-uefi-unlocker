@@ -8,6 +8,7 @@
 - [Why is there no gain on Linux despite a green log?](#linux)
 - [Does the unlock survive a Thunderbolt handoff?](#thunderbolt)
 - [How do I check or repair the unlock in the OS?](#ssdiag)
+- [How do I benchmark compute throughput and stability?](#gpu-benchmark)
 - [What does booter status 0x89 mean?](#bridge-bme)
 - [Why does the platform reset after a successful transaction?](#reconnect)
 - [How do I recover from a black screen, STOP or driver failure?](#recovery)
@@ -35,6 +36,7 @@ The maker emits a flat local `usbroot/` directory. Copy the selected family's fi
 | Root, Ada / Ampere | `scrubber_ad10x.bin` | SEC2 scrubber |
 | Root, Turing | `sec2_bl_tu10x.bin` | FWSEC bootloader |
 | Root, Turing | `gsp-gate.txt` | Maker's GSP check record |
+| Root, Windows source build | `ssdiag-x86_64-windows.exe`, `gpu-benchmark-x86_64-windows.exe` | In-OS register diagnosis and compute/stability tests |
 | Root, after execution | `loader.log` | Stage log; save before another run |
 
 Removing `v67-*.bin` selects replay: no unlock payload, but drivers are still detached, signed firmware runs and the GPU may reset. **Replay is not read-only.** Build with `cargo efi` for read-only sampling.
@@ -162,6 +164,29 @@ For no gain after handoff, use these read-back patterns to guide diagnosis. Conf
 | Effective selectors but low performance | Clocks, power wall and workload |
 
 ssdiag discovers BAR0 from the OS and accepts no manually supplied physical base; it wakes parked GPUs as needed. Its embedded, verified `pmxdrv.sys` uses a temporary `SSDIAG_PMXDRV` service with cleanup on exit, or borrows an existing device such as nvoc's. Driver deployment normally needs administrator privileges. See the [ssdiag reference](../tools/ssdiag/README.md) for the register surface and driver details.
+
+<a id="gpu-benchmark"></a>
+
+## How do I benchmark compute throughput and stability?
+
+The Windows source build places `gpu-benchmark-x86_64-windows.exe` in the USB root. First use [ssdiag](#ssdiag) to verify the in-OS unlock state, then run the compute benchmark:
+
+```powershell
+# List CUDA-visible NVIDIA GPUs
+.\gpu-benchmark-x86_64-windows.exe --list
+
+# Run the short benchmark on GPU 0 and write a JSON report
+.\gpu-benchmark-x86_64-windows.exe --device 0
+
+# Optional five-minute FP16 stress run; stop at 85 °C
+.\gpu-benchmark-x86_64-windows.exe --device 0 --stress-seconds 300 --stress-precision fp16 --max-temp-c 85
+```
+
+The program detects the GPU architecture and runs supported precisions: FP32 FMA; FP16 Tensor Core (Turing and newer); BF16 and TF32 (Ampere and newer); FP8 E4M3 (Ada SM 8.9 and newer, with CUDA Driver API 12.4 or later). Every short run also performs a 512×512 FP16 WMMA GEMM and compares its output with a CPU FP64 reference. The JSON report records the GPU model, compute capability, driver version, TFLOPS per test, timing samples and correctness verdicts for before/after comparison.
+
+Interpret the metrics separately. The 512×512 GEMM uses a simple global-memory WMMA tile kernel for correctness and baseline throughput; it is not a tuned cuBLAS implementation. Tensor Core / FP32 FMA issue-rate numbers are instruction-throughput microbenchmarks, not application speedups. For application-level gains, additionally run the same cuBLAS or application workload with matched dimensions, precision, driver, power profile and background load.
+
+Sustained stability testing is off by default and runs only when `--stress-seconds` is explicitly supplied. It requires GPU temperature telemetry from `nvidia-smi` and stops at `--max-temp-c`; if temperature cannot be read, the sustained test is refused. The program does not change GPU clocks, voltage, power limits, fan settings, firmware or registers. See the [GPU Benchmark usage guide](../tools/gpubench/README.md) for all options and metric details.
 
 <a id="bridge-bme"></a>
 

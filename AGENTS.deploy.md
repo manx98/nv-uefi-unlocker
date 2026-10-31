@@ -11,7 +11,7 @@ nv-uefi-unlocker is a UEFI pre-driver unlocker for GTX 16 and RTX 20/30/40 serie
 | Required files and optional markers | [USB reference](docs/faq.en.md#usb) |
 | Turing GSP prerequisites | [Turing](docs/faq.en.md#turing) |
 | Linux RTD3 / hybrid display / eGPU | [RTD3](docs/faq.en.md#linux), [display](docs/faq.en.md#display), [Thunderbolt](docs/faq.en.md#thunderbolt) |
-| In-OS read-back and recovery | [ssdiag](docs/faq.en.md#ssdiag), [recovery](docs/faq.en.md#recovery) |
+| In-OS read-back, performance and recovery | [ssdiag](docs/faq.en.md#ssdiag), [GPU benchmark](docs/faq.en.md#gpu-benchmark), [recovery](docs/faq.en.md#recovery) |
 
 1. Discover the **target** GPU model, PCI vendor:device, BDF, OS, driver, display mode, Secure Boot state and intended USB volume. On Windows use `nvidia-smi -q` and device/volume inventory; on Linux also use `lspci -nn` and `lsblk -f`. Distinguish the build host from the target. Ask only for facts you cannot discover. Never infer a USB drive letter/device or overwrite an unidentified volume.
 2. Map the target using the compatibility document, not the model number alone. GTX 16/RTX 20 → `tu10x`; RTX 30 GA10x → `ga102`; RTX 40 → `ad102`. GA100, pre-Turing and Blackwell are unsupported. Record unresolved model/platform issues, particularly TU10x 0x91, before proposing a hardware attempt; do not claim an unverified card was tested.
@@ -26,6 +26,8 @@ nv-uefi-unlocker is a UEFI pre-driver unlocker for GTX 16 and RTX 20/30/40 serie
 - Prefer dGPU-direct and entry through Restart/one-time boot menu. D3cold/offline BARs require a different entry path, not blind MMIO or bypassing guards. Thunderbolt handoff can erase the state even when EFI succeeded.
 
 ## Generate assets
+
+For a Windows source checkout, prefer the repository-root `build.ps1`: use `-Family 20`, `-Family 30`, or `-Family 40` for the target family. It ensures the `x86_64-unknown-uefi` Rust target is installed, runs the source build (`cargo build --release`, `cargo efi-tx`), host tests (`cargo xt`), builds the standalone x86_64 Windows `ssdiag` and GPU benchmark executables (including the GPU benchmark's unit tests), and runs the maker. It then publishes a clean, directly copyable `usbroot/` tree containing `EFI/BOOT/BOOTX64.EFI`, `ssdiag-x86_64-windows.exe`, `gpu-benchmark-x86_64-windows.exe`, and only the selected family's required firmware files; extraction intermediates are excluded and temporary staging is removed after a successful publish. `-BuildOnly` compiles and tests all tools without generating USB assets. The wrapper preserves documented optional configuration markers from an existing output, backs up and omits `i_know_what_i_am_doing.txt` because unattended execution is not the default, and archives an existing `loader.log` outside `usbroot/` before replacing the output.
 
 From the extracted release directory, replace the example family with the identified family:
 
@@ -43,17 +45,19 @@ Default output/work directories are `usbroot` / `inputs`. Windows needs PowerShe
 
 `-SkipGspCheck` / `--skip-gsp-check` is only for generating on a different machine; it does not waive target GSP prerequisites. Offline Turing proven-blob selection uses `-ProvenBlob` / `--proven-blob` with the pinned archive. Do not use these switches to force an unready target through the gate.
 
-If building from source is needed, follow [Build](README.en.md#build-from-source-optional): `rustup target add x86_64-unknown-uefi`, `cargo build --release`, `cargo efi-tx`, `cargo xt`. Pass `target/release/assets[.exe]` and `target/x86_64-unknown-uefi/release/loader.efi` explicitly to the maker using `-AssetsExe`/`-BootEfi` or `--assets`/`--boot-efi`. `cargo efi` is read-only and cannot unlock. The ssdiag crate is separate: build it on Windows with `cargo build --release --manifest-path tools/ssdiag/Cargo.toml` if it is not obtained from a release.
+For manual low-level source builds, follow [Build](README.en.md#build-from-source-optional): `rustup target add x86_64-unknown-uefi`, `cargo build --release`, `cargo efi-tx`, `cargo xt`. Build `ssdiag` separately with `cargo build --release --locked --manifest-path tools/ssdiag/Cargo.toml --target-dir target/ssdiag`; copy `target/ssdiag/release/ssdiag.exe` to USB root as `ssdiag-x86_64-windows.exe`. Test and build the GPU benchmark with `cargo test --locked --manifest-path tools/gpubench/Cargo.toml --target-dir target/gpubench` and `cargo build --release --locked --manifest-path tools/gpubench/Cargo.toml --target-dir target/gpubench`; copy `target/gpubench/release/gpu-benchmark.exe` to USB root as `gpu-benchmark-x86_64-windows.exe`. Pass `target/release/assets[.exe]` and `target/x86_64-unknown-uefi/release/loader.efi` explicitly to the maker using `-AssetsExe`/`-BootEfi` or `--assets`/`--boot-efi`. `cargo efi` is read-only and cannot unlock.
 
 ## Assemble and check the USB
 
 Use an identified FAT32 USB volume; preserve existing files and back up any destination `EFI/BOOT/BOOTX64.EFI`. Do not format a volume without explicit authorization. Generate into a local staging directory, not directly onto an existing boot medium: maker removes matching earlier assets from its output directory.
 
-The maker output is **flat and contains intermediates**. Use its final `expected` list, not every `.bin` in the output. Required destination files (`F` = normalized family):
+The lower-level maker output is **flat and contains intermediates**. `build.ps1` wraps it and publishes the clean layout below. If invoking the maker directly, use its final `expected` list, not every `.bin` in the output. Required destination files (`F` = normalized family):
 
 | Destination | Source / condition |
 | --- | --- |
 | `EFI/BOOT/BOOTX64.EFI` | generated `BOOTX64.EFI` (source build: maker copies `loader.efi` under this name) |
+| USB root | `ssdiag-x86_64-windows.exe` (standalone x64 Windows diagnostic tool) |
+| USB root | `gpu-benchmark-x86_64-windows.exe` (standalone x64 Windows CUDA-core / Tensor Core benchmark) |
 | USB root | `booter_load_F.bin`, `gsp_boot_desc_F.bin`, `gsp_boot_F.bin`, `fwimage_F.bin`, `fwsignature_F.bin`, `v67-F-four-plm.bin` |
 | USB root, `ad102` / `ga102` | `scrubber_ad10x.bin` |
 | USB root, `tu10x` | `sec2_bl_tu10x.bin`; preserve generated `gsp-gate.txt` as the build record |
@@ -69,7 +73,7 @@ Do not write the system ESP, change NVRAM BootOrder, install a resident boot ent
 3. After OS boot, preserve USB-root `loader.log` before another run. Inspect family-specific execution/selector read-backs and final handoff, not just a zero status or a generic all-green verdict. Ampere uses the PLM-flip verdict; do not impose Ada's marker/HALT criteria on it. Turing relocks PLM and skips FLR on the unlock path; a closed gate alone is not a failed unlock.
 4. **Windows:** run `ssdiag-x86_64-windows.exe` (administrator if driver deployment is needed). **Linux:** from the checkout, run `sudo python3 tools/diag-unlock.py --bdf ACTUAL_TARGET_BDF`, substituting the inventoried BDF. Compare in-OS SS0/SS1 read-backs (`0x88888888` / low nibble `0x8`) and the family verdict. Do not reuse a physical BAR0 address from EFI or a previous boot.
 5. If Ampere/Ada's gate is open but selectors reverted, explain the FAQ's `--reapply` write operation before using it; it cannot open a closed gate or restore a powered-off GPU. Keep initial diagnosis read-only. Turing remains read-only in ssdiag.
-6. Compare the same workload, dimensions, precision, power settings and measurement method before/after. Report firmware execution, OS survival and performance separately. nvoc tuning is optional and requires its own appropriate settings; do not copy extreme benchmark voltages/power values onto another card.
+6. On Windows, after the read-only ssdiag check, run `gpu-benchmark-x86_64-windows.exe` and retain its JSON report. Compare the same GPU, driver, workload, dimensions, precision, power settings and measurement method before/after. Report the 512×512 reference GEMM, instruction issue-rate microbenchmarks and any application-level GEMM separately; the bundled direct-load WMMA GEMM is not a cuBLAS replacement. Stress mode is opt-in, temperature-guarded and must not be used without adequate cooling. Report firmware execution, OS survival and performance separately. nvoc tuning is optional and requires its own appropriate settings; do not copy extreme benchmark voltages/power values onto another card.
 7. STOP/fault/stuck black screen: **no retry in the same session**. Fully power off using the vendor's procedure, remove USB, boot normally and inspect driver/device state. Archive the failed log, then consult recovery/known issues. Do not turn a failed run into an automatic retry loop.
 
 Final report: target identity; chosen release/build and family; prepared files/volume; steps requiring physical/user action; actual EFI read-back evidence; OS verdict and measurements if available; unresolved issues. If only media is prepared, say exactly that. Unlock state is volatile; cold boot/power loss requires replay. The current loader routes by family and logs PROM CRC32; per-card ROM/PROM SHA-256 enforcement remains pending, so do not claim it was performed by the loader.

@@ -8,6 +8,7 @@
 - [Linux 日志全绿，为什么没有提升？](#linux)
 - [雷电 eGPU 能保留解锁吗？](#thunderbolt)
 - [怎样在系统内检查或修复解锁？](#ssdiag)
+- [怎样进行显卡算力和稳定性验证？](#gpu-benchmark)
 - [booter status 0x89 是什么？](#bridge-bme)
 - [事务成功后为什么会复位或黑屏？](#reconnect)
 - [黑屏、STOP 或驱动异常后怎样恢复？](#recovery)
@@ -35,6 +36,7 @@ maker 在本地 `usbroot/` 平铺输出文件。按脚本末尾清单复制所�
 | 盘根，Ada / Ampere | `scrubber_ad10x.bin` | SEC2 scrubber |
 | 盘根，Turing | `sec2_bl_tu10x.bin` | FWSEC 所需引导段 |
 | 盘根，Turing | `gsp-gate.txt` | maker 生成的 GSP 检查记录 |
+| 盘根，Windows 源码构建 | `ssdiag-x86_64-windows.exe`、`gpu-benchmark-x86_64-windows.exe` | 系统内寄存器诊断与算力/稳定性测试工具 |
 | 盘根，运行后 | `loader.log` | 阶段日志，下次运行前另存 |
 
 移除 `v67-*.bin` 会进入回放模式：不执行解锁载荷，但仍会断开驱动、执行签名固件并可能复位 GPU。**回放不是只读检查**；只读采样使用 `cargo efi` 构建。
@@ -162,6 +164,29 @@ ssdiag --reapply
 | 选择器仍有效但性能低 | 频率、功耗墙与工作负载 |
 
 ssdiag 从 OS 发现 BAR0，不接受手填物理地址；会按需唤醒停泊卡。内嵌的 `pmxdrv.sys` 经校验，以自有 `SSDIAG_PMXDRV` 服务临时加载，退出时清理；若 nvoc 等已有可用设备则借用。部署驱动通常需要管理员。更多寄存器范围及驱动说明见 [ssdiag 文档](../tools/ssdiag/README.md)。
+
+<a id="gpu-benchmark"></a>
+
+## 怎样进行显卡算力和稳定性验证？
+
+Windows 源码构建的 `usbroot/` 根目录包含 `gpu-benchmark-x86_64-windows.exe`。先用 [ssdiag](#ssdiag) 确认系统内解锁状态，再运行算力测试：
+
+```powershell
+# 列出系统识别到的 NVIDIA GPU
+.\gpu-benchmark-x86_64-windows.exe --list
+
+# 对 GPU 0 执行短基准测试，自动生成 JSON 结果
+.\gpu-benchmark-x86_64-windows.exe --device 0
+
+# 可选：持续 5 分钟 FP16 负载，温度达到 85°C 时停止
+.\gpu-benchmark-x86_64-windows.exe --device 0 --stress-seconds 300 --stress-precision fp16 --max-temp-c 85
+```
+
+程序自动识别 GPU 架构和可用精度：FP32 FMA；FP16 Tensor Core（Turing 及更新）；BF16、TF32（Ampere 及更新）；FP8 E4M3（Ada SM 8.9 及更新，且需要 CUDA Driver API 12.4 或更新版本）。每次短测试还会执行 512×512 FP16 WMMA GEMM，并与 CPU FP64 参考结果比较。结果 JSON 记录 GPU 型号、计算能力、驱动版本、各精度 TFLOPS、计时样本和正确性检查，便于保存解锁前后的对照数据。
+
+注意区分两类指标：512×512 GEMM 使用简单的全局内存 WMMA tile 读取，是正确性与基础吞吐参考，不是 cuBLAS 优化实现；Tensor Core / FP32 FMA issue-rate 是指令吞吐微基准，也不等同于实际应用加速比例。若要评估真实应用收益，应在相同矩阵规模、精度、驱动、功耗配置和后台负载下，额外运行同一套 cuBLAS 或应用工作负载。
+
+稳定性测试默认关闭，只有显式传入 `--stress-seconds` 才会持续施加负载。它要求 `nvidia-smi` 能提供温度读数，并在达到 `--max-temp-c` 时停止；无法读取温度时会拒绝启动持续负载。程序不会修改显卡频率、电压、功耗限制、风扇、固件或寄存器。更多参数和指标解释见 [GPU Benchmark 使用说明](../tools/gpubench/README.md)。
 
 <a id="bridge-bme"></a>
 

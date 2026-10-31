@@ -43,6 +43,46 @@ $ErrorActionPreference = 'Stop'
 # progress UI is active ("unexpected EOF or 0 bytes") - issue #59.
 $ProgressPreference = 'SilentlyContinue'
 
+# Resolve paths using PowerShell's current filesystem location. .NET's process
+# current directory can differ from Get-Location after Push-Location, which
+# otherwise sends relative cache paths to the user's home directory.
+function Resolve-CurrentPath([string]$Path) {
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $Path))
+}
+$Out = Resolve-CurrentPath $Out
+$Work = Resolve-CurrentPath $Work
+if ($AssetsExe) { $AssetsExe = Resolve-CurrentPath $AssetsExe }
+if ($BootEfi) { $BootEfi = Resolve-CurrentPath $BootEfi }
+if ($ProvenBlob) { $ProvenBlob = Resolve-CurrentPath $ProvenBlob }
+
+# Windows Schannel can fail its TLS handshake with the CachyOS CDN even when
+# the URL is reachable. Python 3 on Windows uses OpenSSL, avoiding that TLS
+# failure without WSL, disabling certificate verification, or changing inputs.
+# The caller still enforces the pinned SHA-256 on every successful download.
+function Invoke-PinnedDownload([string]$Url, [string]$Destination) {
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $Destination -ErrorAction Stop
+        return
+    } catch {
+        $webError = $_.Exception.Message
+        $python = Get-Command python.exe -ErrorAction SilentlyContinue
+        if (-not $python) {
+            throw "Windows HTTPS download failed ($webError). Install Python 3 for the OpenSSL fallback."
+        }
+        Write-Warning "Windows HTTPS download failed ($webError); retrying with native Python 3 (OpenSSL)"
+        $absoluteDestination = Resolve-CurrentPath $Destination
+        $destinationDirectory = Split-Path -Parent $absoluteDestination
+        New-Item -ItemType Directory -Force -Path $destinationDirectory | Out-Null
+        & $python.Source (Join-Path $PSScriptRoot "download-pinned.py") $Url $absoluteDestination
+        if ($LASTEXITCODE -ne 0) {
+            throw "Windows HTTPS download failed ($webError); Python fallback exit code: $LASTEXITCODE"
+        }
+    }
+}
+
 # Normalize the family aliases (the task is 20/30/40 series, not chip names).
 $Family = switch ($Family.ToLowerInvariant()) {
     { $_ -in "ad102", "rtx40", "40" } { "ad102" }
@@ -147,10 +187,13 @@ if ($Family -eq "tu10x" -and -not $SkipGspCheck) {
         if ($notGsp.Count -gt 0) {
             Write-Host ""
             throw "Turing adapter(s) above are NOT in GSP firmware mode.
-Fix BEFORE using this stick: run .\enable-turing-unlock.ps1 from an
-elevated PowerShell, then RESTART (a hibernate resume does NOT
-re-initialize the driver and will not apply the mode). Re-run this
-script after the restart."
+On the TARGET machine, from the source project root, run
+  .\tools\windows\enable-turing-unlock.ps1
+from an elevated PowerShell, then RESTART (hibernate/resume is insufficient).
+Verify GSP Firmware Version is not N/A in 'nvidia-smi -q', then re-run the build.
+If you are ONLY preparing files for ANOTHER machine, you may explicitly use
+  .\build.ps1 -Family 20 -SkipGspCheck
+This bypasses the build-host check only, NOT the target's GSP prerequisite."
         }
 
         $runtime = Get-GspRuntimeState
@@ -198,7 +241,7 @@ foreach ($s in $Sources) {
             if (Test-Path $part) { Remove-Item $part -Force }
             Write-Host ("[fetch] {0}{1}" -f $s.Name, $(if ($attempt -gt 1) { " (retry)" } else { "" }))
             try {
-                Invoke-WebRequest -Uri $s.Url -OutFile $part
+                Invoke-PinnedDownload -Url $s.Url -Destination $part
                 Move-Item -Force $part $dest
             } catch {
                 Remove-Item $part -Force -ErrorAction SilentlyContinue

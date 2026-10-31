@@ -73,7 +73,7 @@ U 盘（FAT32）
 1. 从固件的一次性启动菜单选择 U 盘。
 2. 版本屏按 **空格或回车**运行；其他键或 30 秒不操作会中止事务并交回系统引导器。目标 GPU 暂时黑屏或冻结末帧属正常现象。
 3. 等待工具完成并自动链回系统，日志在 U 盘根目录 `loader.log`。
-4. Windows 下用发布包的 `ssdiag-x86_64-windows.exe` 检查系统内状态，并用相同负载比较解锁前后的性能。Linux 可在源码仓库运行 `sudo python3 tools/diag-unlock.py`。详见 [验证与修复](docs/faq.md#ssdiag)。每次冷启动需要重放。
+4. Windows 下先用 `ssdiag-x86_64-windows.exe` 检查系统内寄存器状态，再运行 `gpu-benchmark-x86_64-windows.exe` 测试 FP16 GEMM、FP32 FMA 和硬件支持的 Tensor Core 精度。测试结果保存为 JSON，便于解锁前后比较。该 GPU Benchmark 由源码构建脚本放入 `usbroot/`；Linux 可在源码仓库运行 `sudo python3 tools/diag-unlock.py`。详见 [系统内验证](docs/faq.md#ssdiag) 和 [算力测试](docs/faq.md#gpu-benchmark)。每次冷启动需要重放。
 
 遇到 STOP、异常或黑屏卡死，**同会话不要重试**；完全断电后拔 U 盘，走原系统引导，再按 [恢复说明](docs/faq.md#recovery)检查。
 
@@ -83,12 +83,21 @@ U 盘（FAT32）
 
 ## 自行构建（可选）
 
-使用发布包可跳过本节。需要 Rust 工具链；Windows 选择 MSVC 版本。在仓库根目录运行：
+Windows 源码仓库可以直接一键构建。20 / 16 系示例：
+
+```powershell
+.\build.ps1 -Family 20
+```
+
+将 `20` 替换为目标系列 `30` 或 `40`。脚本会检查并按需安装 UEFI Rust target，编译宿主工具、UEFI Loader、`ssdiag` 诊断程序和独立的 Windows x64 GPU Benchmark，运行宿主测试、下载并校验固定版本固件，最后把**可直接复制到 U 盘的文件**整理到 `usbroot/`。其中包含 `EFI/BOOT/BOOTX64.EFI`、`ssdiag-x86_64-windows.exe`、`gpu-benchmark-x86_64-windows.exe` 和对应家族的根目录文件，不包含固件提取中间文件。`-BuildOnly` 只编译并运行测试，不生成 USB 文件。下面是需要手动控制底层构建步骤时使用的方式：
+
+使用发布包可跳过本节。手动执行底层构建步骤时，需要 Rust 工具链；Windows 选择 MSVC 版本。在仓库根目录运行：
 
 ```text
 rustup target add x86_64-unknown-uefi
 cargo build --release
 cargo efi-tx
+cargo xt
 ```
 
 EFI 程序生成在 `target/x86_64-unknown-uefi/release/loader.efi`。用以下命令制作启动文件（40 系示例；30 系改 `-Family 30`，20 / 16 系改 `-Family 20`）：

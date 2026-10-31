@@ -1,0 +1,17 @@
+[package]
+name = "gpu-benchmark"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only"
+description = "Windows NVIDIA CUDA-core and Tensor Core throughput / stability benchmark"
+
+[workspace]
+
+[[bin]]
+name = "gpu-benchmark"
+path = "main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

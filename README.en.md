@@ -73,7 +73,7 @@ Back up an existing `EFI/BOOT/BOOTX64.EFI` before replacing it. Do not copy into
 1. Select the USB stick in the firmware’s one-time boot menu.
 2. Press **Space or Enter** at the version screen. Any other key or 30 seconds without input aborts the transaction and returns to the OS bootloader. A temporary black screen or frozen frame on the target GPU is expected.
 3. Wait for the automatic OS handoff. The log is `loader.log` at the stick root.
-4. On Windows, run the release’s `ssdiag-x86_64-windows.exe` to check the in-OS state, then compare performance using the same workload. On Linux, run `sudo python3 tools/diag-unlock.py` from a source checkout. See [verification and repair](docs/faq.en.md#ssdiag). Replay after each cold boot.
+4. On Windows, first run `ssdiag-x86_64-windows.exe` to check the in-OS register state, then run `gpu-benchmark-x86_64-windows.exe` for FP16 GEMM, FP32 FMA and the Tensor Core precisions supported by the GPU. Results are saved as JSON for before/after comparison. The source `build.ps1` places the GPU benchmark in `usbroot/`. On Linux, run `sudo python3 tools/diag-unlock.py` from a source checkout. See [in-OS verification](docs/faq.en.md#ssdiag) and [compute benchmarking](docs/faq.en.md#gpu-benchmark). Replay after each cold boot.
 
 On STOP, a fault or a stuck black screen, **do not retry in the same session**. Fully power off, remove the stick and boot normally; follow the [recovery instructions](docs/faq.en.md#recovery).
 
@@ -83,12 +83,21 @@ For agent-assisted setup, use the [deployment guide](AGENTS.deploy.md). Copy thi
 
 ## Build from source (optional)
 
-Skip this section if you use a release package. Install Rust; choose the MSVC toolchain on Windows. From the repository root:
+On a Windows source checkout, use the one-command build wrapper (RTX 20 / GTX 16 example):
+
+```powershell
+.\build.ps1 -Family 20
+```
+
+Replace `20` with `30` or `40` for the target family. The script checks and installs the UEFI Rust target if needed, builds the host tools, UEFI loader, standalone x64 Windows `ssdiag` diagnostic and GPU benchmark executables, runs host-side tests, downloads and verifies the pinned firmware inputs, then assembles the **directly copyable USB files** in `usbroot/`. It contains `EFI/BOOT/BOOTX64.EFI`, `ssdiag-x86_64-windows.exe`, `gpu-benchmark-x86_64-windows.exe` and the selected family's root files, without extraction intermediates. `-BuildOnly` compiles and tests without generating USB files. The lower-level manual workflow follows:
+
+Skip this section if you use a release package. For the manual low-level workflow, install Rust; choose the MSVC toolchain on Windows. From the repository root:
 
 ```text
 rustup target add x86_64-unknown-uefi
 cargo build --release
 cargo efi-tx
+cargo xt
 ```
 
 The EFI program is generated at `target/x86_64-unknown-uefi/release/loader.efi`. Prepare the boot files with the following commands (40-series example; use `-Family 30` for the 30 series or `-Family 20` for the 20 / 16 series):
